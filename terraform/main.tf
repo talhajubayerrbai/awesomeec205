@@ -329,9 +329,10 @@ resource "aws_instance" "app" {
   iam_instance_profile   = aws_iam_instance_profile.ssm.name
   key_name               = aws_key_pair.app.key_name
 
-  # Use a quoted heredoc (<<-'EOF') so Terraform does not interpolate the
-  # shell $ variables inside the script.
-  user_data = <<-'EOF'
+  # Use <<-EOF (unquoted) so Terraform accepts the heredoc as valid HCL.
+  # Shell $ variables that must NOT be interpolated by Terraform are
+  # escaped with $$ (e.g. $${i} renders as ${i} in the final script).
+  user_data = <<-EOF
     #!/bin/bash
     set -e
 
@@ -347,7 +348,7 @@ resource "aws_instance" "app" {
     # Wait until any existing dpkg/apt lock is released
     for i in $(seq 1 30); do
       fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || break
-      echo "Waiting for dpkg lock (attempt ${i})..."
+      echo "Waiting for dpkg lock (attempt $${i})..."
       sleep 5
     done
 
