@@ -23,8 +23,8 @@
     - name: Install system packages
       ansible.builtin.apt:
         name:
-          - python3.11
-          - python3.11-venv
+          - python3.12
+          - python3.12-venv
           - python3-pip
           - git
           - curl
@@ -98,7 +98,7 @@
     # ------------------------------------------------------------------
     - name: Create Python virtual environment
       ansible.builtin.command:
-        cmd: python3.11 -m venv {{ venv_dir }}
+        cmd: python3.12 -m venv {{ venv_dir }}
         creates: "{{ venv_dir }}/bin/activate"
 
     - name: Upgrade pip inside venv
@@ -106,7 +106,7 @@
         name: pip
         state: latest
         virtualenv: "{{ venv_dir }}"
-        virtualenv_python: python3.11
+        virtualenv_python: python3.12
 
     - name: Install gunicorn and uvicorn
       ansible.builtin.pip:
