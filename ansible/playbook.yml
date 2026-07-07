@@ -1,0 +1,191 @@
+---
+- name: Configure Python application on private EC2
+  hosts: all
+  become: true
+  gather_facts: true
+
+  vars:
+    app_dir: /opt/app
+    venv_dir: /opt/app/.venv
+    app_user: ubuntu
+    app_port: 8000
+    project_name: "{{ project_name | default('app') }}"
+
+  tasks:
+    # ------------------------------------------------------------------
+    # 1. System packages
+    # ------------------------------------------------------------------
+    - name: Update apt cache
+      ansible.builtin.apt:
+        update_cache: true
+        cache_valid_time: 3600
+
+    - name: Install system packages
+      ansible.builtin.apt:
+        name:
+          - python3.11
+          - python3.11-venv
+          - python3-pip
+          - git
+          - curl
+          - build-essential
+        state: present
+
+    # ------------------------------------------------------------------
+    # 2. Application directory
+    # ------------------------------------------------------------------
+    - name: Create application directory
+      ansible.builtin.file:
+        path: "{{ app_dir }}"
+        state: directory
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+        mode: "0755"
+
+    # ------------------------------------------------------------------
+    # 3. Copy application source
+    # ------------------------------------------------------------------
+    - name: Copy main.py entrypoint
+      ansible.builtin.copy:
+        src: main.py
+        dest: "{{ app_dir }}/main.py"
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+        mode: "0644"
+
+    - name: Copy app package directory
+      ansible.builtin.copy:
+        src: app/
+        dest: "{{ app_dir }}/app/"
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+        mode: "0644"
+
+    - name: Check if public directory exists locally
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/../public"
+      register: public_dir_stat
+      delegate_to: localhost
+      become: false
+
+    - name: Copy public directory if it exists
+      ansible.builtin.copy:
+        src: public/
+        dest: "{{ app_dir }}/public/"
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+        mode: "0644"
+      when: public_dir_stat.stat.exists
+
+    - name: Copy requirements.txt if it exists
+      ansible.builtin.stat:
+        path: "{{ playbook_dir }}/../requirements.txt"
+      register: req_stat
+      delegate_to: localhost
+      become: false
+
+    - name: Upload requirements.txt
+      ansible.builtin.copy:
+        src: requirements.txt
+        dest: "{{ app_dir }}/requirements.txt"
+        owner: "{{ app_user }}"
+        group: "{{ app_user }}"
+        mode: "0644"
+      when: req_stat.stat.exists
+
+    # ------------------------------------------------------------------
+    # 4. Python virtual environment and dependencies
+    # ------------------------------------------------------------------
+    - name: Create Python virtual environment
+      ansible.builtin.command:
+        cmd: python3.11 -m venv {{ venv_dir }}
+        creates: "{{ venv_dir }}/bin/activate"
+
+    - name: Upgrade pip inside venv
+      ansible.builtin.pip:
+        name: pip
+        state: latest
+        virtualenv: "{{ venv_dir }}"
+        virtualenv_python: python3.11
+
+    - name: Install gunicorn and uvicorn
+      ansible.builtin.pip:
+        name:
+          - gunicorn
+          - uvicorn[standard]
+        state: present
+        virtualenv: "{{ venv_dir }}"
+
+    - name: Install application dependencies from requirements.txt
+      ansible.builtin.pip:
+        requirements: "{{ app_dir }}/requirements.txt"
+        state: present
+        virtualenv: "{{ venv_dir }}"
+      when: req_stat.stat.exists
+
+    - name: Install core FastAPI dependencies (fallback)
+      ansible.builtin.pip:
+        name:
+          - fastapi
+          - uvicorn[standard]
+          - gunicorn
+          - python-multipart
+          - aiofiles
+        state: present
+        virtualenv: "{{ venv_dir }}"
+
+    # ------------------------------------------------------------------
+    # 5. Systemd service
+    # ------------------------------------------------------------------
+    - name: Create systemd service unit file
+      ansible.builtin.copy:
+        dest: /etc/systemd/system/myapp.service
+        owner: root
+        group: root
+        mode: "0644"
+        content: |
+          [Unit]
+          Description=Python FastAPI Application ({{ project_name }})
+          After=network.target
+
+          [Service]
+          Type=simple
+          User={{ app_user }}
+          WorkingDirectory={{ app_dir }}
+          ExecStart={{ venv_dir }}/bin/gunicorn app.main:app \
+            -k uvicorn.workers.UvicornWorker \
+            -w 4 \
+            -b 0.0.0.0:{{ app_port }}
+          Restart=always
+          RestartSec=5
+          StandardOutput=journal
+          StandardError=journal
+          Environment=APP_ENV=production
+          Environment=PORT={{ app_port }}
+
+          [Install]
+          WantedBy=multi-user.target
+
+    - name: Reload systemd daemon
+      ansible.builtin.systemd:
+        daemon_reload: true
+
+    - name: Enable and start myapp service
+      ansible.builtin.systemd:
+        name: myapp.service
+        enabled: true
+        state: restarted
+
+    # ------------------------------------------------------------------
+    # 6. Verify service is running
+    # ------------------------------------------------------------------
+    - name: Wait for application to be ready on localhost
+      ansible.builtin.uri:
+        url: "http://localhost:{{ app_port }}/health"
+        method: GET
+        status_code: [200, 307, 308]
+        follow_redirects: all
+      register: health_result
+      retries: 12
+      delay: 10
+      until: health_result.status in [200, 307, 308]
