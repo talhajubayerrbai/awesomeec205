@@ -47,7 +47,7 @@
     # ------------------------------------------------------------------
     - name: Copy main.py entrypoint
       ansible.builtin.copy:
-        src: main.py
+        src: "{{ playbook_dir }}/../main.py"
         dest: "{{ app_dir }}/main.py"
         owner: "{{ app_user }}"
         group: "{{ app_user }}"
@@ -55,7 +55,7 @@
 
     - name: Copy app package directory
       ansible.builtin.copy:
-        src: app/
+        src: "{{ playbook_dir }}/../app/"
         dest: "{{ app_dir }}/app/"
         owner: "{{ app_user }}"
         group: "{{ app_user }}"
@@ -70,7 +70,7 @@
 
     - name: Copy public directory if it exists
       ansible.builtin.copy:
-        src: public/
+        src: "{{ playbook_dir }}/../public/"
         dest: "{{ app_dir }}/public/"
         owner: "{{ app_user }}"
         group: "{{ app_user }}"
@@ -86,7 +86,7 @@
 
     - name: Upload requirements.txt
       ansible.builtin.copy:
-        src: requirements.txt
+        src: "{{ playbook_dir }}/../requirements.txt"
         dest: "{{ app_dir }}/requirements.txt"
         owner: "{{ app_user }}"
         group: "{{ app_user }}"
