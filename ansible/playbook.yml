@@ -62,12 +62,10 @@
         mode: "0644"
 
     - name: Check if public directory exists locally
-      ansible.builtin.stat:
+      local_action:
+        module: ansible.builtin.stat
         path: "{{ playbook_dir }}/../public"
       register: public_dir_stat
-      delegate_to: localhost
-      vars:
-        ansible_connection: local
       become: false
 
     - name: Copy public directory if it exists
@@ -79,13 +77,11 @@
         mode: "0644"
       when: public_dir_stat.stat.exists
 
-    - name: Copy requirements.txt if it exists
-      ansible.builtin.stat:
+    - name: Check if requirements.txt exists locally
+      local_action:
+        module: ansible.builtin.stat
         path: "{{ playbook_dir }}/../requirements.txt"
       register: req_stat
-      delegate_to: localhost
-      vars:
-        ansible_connection: local
       become: false
 
     - name: Upload requirements.txt
