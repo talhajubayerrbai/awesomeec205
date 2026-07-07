@@ -234,7 +234,7 @@ resource "aws_security_group_rule" "app_inbound_from_alb" {
   protocol                 = "tcp"
   security_group_id        = aws_security_group.app.id
   source_security_group_id = aws_security_group.alb.id
-  description              = "Allow traffic from ALB on app port"
+  description              = "Allow traffic from ALB on port 8000"
 }
 
 # -------------------------------------------------------------------
@@ -276,6 +276,27 @@ resource "aws_iam_role_policy" "ssm_ec2_describe" {
   })
 }
 
+# S3 permissions required by the community.aws.aws_ssm Ansible connection
+# plugin, which stages task payloads via S3 (ansible_aws_ssm_bucket_name).
+resource "aws_iam_role_policy" "ssm_s3_ansible" {
+  name = "${var.project_name}-ssm-s3-ansible"
+  role = aws_iam_role.ssm.id
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "s3:GetObject",
+        "s3:PutObject",
+        "s3:DeleteObject",
+        "s3:ListBucket"
+      ]
+      Resource = "*"
+    }]
+  })
+}
+
 resource "aws_iam_instance_profile" "ssm" {
   name = "${var.project_name}-ssm-profile"
   role = aws_iam_role.ssm.name
@@ -308,13 +329,43 @@ resource "aws_instance" "app" {
   iam_instance_profile   = aws_iam_instance_profile.ssm.name
   key_name               = aws_key_pair.app.key_name
 
-  user_data = <<-EOF
+  # Use a quoted heredoc (<<-'EOF') so Terraform does not interpolate the
+  # shell $ variables inside the script.
+  user_data = <<-'EOF'
     #!/bin/bash
     set -e
+
+    # ----------------------------------------------------------------
+    # 1. Stop background apt services that hold the dpkg lock and
+    #    would race with the Ansible apt tasks later.
+    # ----------------------------------------------------------------
+    systemctl stop unattended-upgrades apt-daily.service \
+      apt-daily-upgrade.service 2>/dev/null || true
+    systemctl disable unattended-upgrades apt-daily.timer \
+      apt-daily-upgrade.timer 2>/dev/null || true
+
+    # Wait until any existing dpkg/apt lock is released
+    for i in $(seq 1 30); do
+      fuser /var/lib/dpkg/lock-frontend >/dev/null 2>&1 || break
+      echo "Waiting for dpkg lock (attempt ${i})..."
+      sleep 5
+    done
+
     apt-get update -y
-    snap install amazon-ssm-agent --classic || true
+
+    # ----------------------------------------------------------------
+    # 2. Install the SSM agent via the official .deb package.
+    #    Using the .deb instead of 'snap install --classic' avoids the
+    #    snap-daemon reboot trigger that stopped the instance in the
+    #    previous run (reported by EC2 as "User initiated" stop).
+    # ----------------------------------------------------------------
+    curl -sSL \
+      "https://s3.amazonaws.com/ec2-downloads-windows/SSMAgent/latest/debian_amd64/amazon-ssm-agent.deb" \
+      -o /tmp/amazon-ssm-agent.deb
+    dpkg -i /tmp/amazon-ssm-agent.deb || apt-get install -f -y
+
     systemctl enable amazon-ssm-agent
-    systemctl start amazon-ssm-agent
+    systemctl restart amazon-ssm-agent
   EOF
 
   tags = {
